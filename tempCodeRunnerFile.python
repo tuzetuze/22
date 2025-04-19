@@ -1,0 +1,271 @@
+import torch
+import torch.nn as nn
+import math
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, nhead, dropout=0.1):
+        super().__init__()
+        self.nhead = nhead
+        self.d_model = d_model
+        self.d_k = d_model // nhead
+
+        self.q_linear = nn.Linear(d_model, d_model)
+        self.v_linear = nn.Linear(d_model, d_model)
+        self.k_linear = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.out = nn.Linear(d_model, d_model)
+
+    def forward(self, query, key, value, mask=None):
+        bs = query.size(0)
+
+        # perform linear operation and split into N heads
+        k = self.k_linear(key).view(bs, -1, self.nhead, self.d_k)
+        q = self.q_linear(query).view(bs, -1, self.nhead, self.d_k)
+        v = self.v_linear(value).view(bs, -1, self.nhead, self.d_k)
+
+        # transpose to get dimensions bs * nhead * sl * d_k
+        k = k.transpose(1, 2)
+        q = q.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # calculate attention using scaled dot product
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        if mask is not None:
+             # Ensure mask has the same dimensions for broadcasting
+             if mask.dim() == 2:
+                 mask = mask.unsqueeze(1).unsqueeze(2) # Shape: [bs, 1, 1, sl] or [bs, 1, sl, sl]
+             elif mask.dim() == 3:
+                 mask = mask.unsqueeze(1) # Shape: [bs, 1, sl, sl]
+             scores = scores.masked_fill(mask == 0, -1e9) # Use a large negative value
+
+        attn_output_weights = torch.softmax(scores, dim=-1)
+        attn_output_weights = self.dropout(attn_output_weights)
+
+        # concatenate heads and put through final linear layer
+        output = torch.matmul(attn_output_weights, v)
+        output = output.transpose(1, 2).contiguous().view(bs, -1, self.d_model)
+        output = self.out(output)
+        return output
+
+class PositionwiseFeedForward(nn.Module):
+    def __init__(self, d_model, dim_feedforward=2048, dropout=0.1):
+        super().__init__()
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        return x
+
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(d_model, nhead, dropout=dropout)
+        self.feed_forward = PositionwiseFeedForward(d_model, dim_feedforward, dropout=dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, src, src_mask=None):
+        # Self-attention block
+        attn_output = self.self_attn(src, src, src, mask=src_mask)
+        src = src + self.dropout1(attn_output)
+        src = self.norm1(src)
+
+        # Feed-forward block
+        ff_output = self.feed_forward(src)
+        src = src + self.dropout2(ff_output)
+        src = self.norm2(src)
+        return src
+
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(d_model, nhead, dropout=dropout)
+        self.cross_attn = MultiHeadAttention(d_model, nhead, dropout=dropout)
+        self.feed_forward = PositionwiseFeedForward(d_model, dim_feedforward, dropout=dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None):
+        # Self-attention block (masked)
+        attn_output = self.self_attn(tgt, tgt, tgt, mask=tgt_mask)
+        tgt = tgt + self.dropout1(attn_output)
+        tgt = self.norm1(tgt)
+
+        # Cross-attention block (attends to encoder output)
+        attn_output = self.cross_attn(tgt, memory, memory, mask=memory_mask)
+        tgt = tgt + self.dropout2(attn_output)
+        tgt = self.norm2(tgt)
+
+        # Feed-forward block
+        ff_output = self.feed_forward(tgt)
+        tgt = tgt + self.dropout3(ff_output)
+        tgt = self.norm3(tgt)
+        return tgt
+
+class Transformer(nn.Module):
+    def __init__(self, src_vocab_size, tgt_vocab_size, d_model=512, nhead=8, num_encoder_layers=6,
+                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1, max_len=5000):
+        super().__init__()
+        self.d_model = d_model
+        self.src_embedding = nn.Embedding(src_vocab_size, d_model)
+        self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout, max_len)
+
+        encoder_layers = nn.ModuleList([EncoderLayer(d_model, nhead, dim_feedforward, dropout) for _ in range(num_encoder_layers)])
+        self.encoder = nn.Sequential(*encoder_layers) # Using Sequential for simplicity if layers are identical
+
+        decoder_layers = nn.ModuleList([DecoderLayer(d_model, nhead, dim_feedforward, dropout) for _ in range(num_decoder_layers)])
+        self.decoder = nn.ModuleList(decoder_layers) # Keep as ModuleList to pass memory explicitly
+
+        self.fc_out = nn.Linear(d_model, tgt_vocab_size)
+        self._reset_parameters()
+
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def _generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def forward(self, src, tgt, src_padding_mask=None, tgt_padding_mask=None, memory_key_padding_mask=None):
+        """
+        Args:
+            src: (Batch Size, Source Sequence Length)
+            tgt: (Batch Size, Target Sequence Length)
+            src_padding_mask: (Batch Size, Source Sequence Length)
+            tgt_padding_mask: (Batch Size, Target Sequence Length)
+            memory_key_padding_mask: (Batch Size, Source Sequence Length) - Same as src_padding_mask typically
+
+        Returns:
+            output: (Batch Size, Target Sequence Length, Target Vocabulary Size)
+        """
+        # Assume src/tgt are Batch x SeqLen
+        # PyTorch Transformer layers expect SeqLen x Batch x EmbeddingDim
+        # So we need to transpose src and tgt after embedding + pos encoding
+
+        src_emb = self.src_embedding(src) * math.sqrt(self.d_model)
+        src_emb = self.pos_encoder(src_emb.transpose(0, 1)) # SeqLen x Batch x Dim
+
+        tgt_emb = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
+        tgt_emb = self.pos_encoder(tgt_emb.transpose(0, 1)) # SeqLen x Batch x Dim
+
+        # Generate target mask (for preventing attention to future tokens)
+        tgt_seq_len = tgt_emb.size(0)
+        tgt_mask = self._generate_square_subsequent_mask(tgt_seq_len).to(tgt.device)
+
+
+        # Process masks: PyTorch MultiHeadAttention expects masks where True indicates positions *not* to attend.
+        # We need to convert padding masks (where True means padding)
+        # And combine with the square subsequent mask for the decoder self-attention.
+        # Also, masks need shape (Batch Size * Num Heads, Seq Len, Seq Len) or (Batch Size, Num Heads, Seq Len, Seq Len)
+        # Or simpler, (Batch Size, Seq Len) which broadcasts. Let's keep it simple for now.
+        # The MHA layer implementation above handles broadcasting [bs, sl] or [bs, 1, sl, sl] etc.
+
+        # Pass through Encoder
+        # Note: PyTorch nn.TransformerEncoder expects mask shape (N, S) where N is batch size, S is sequence length
+        # Or (S, S) for src_mask. Our MHA expects (N, 1, S, S) or similar.
+        # Let's adjust the MHA implementation to better handle standard padding masks (N,S)
+        # Update: Corrected MHA mask handling
+
+        memory = self.encoder(src_emb) # Pass src_padding_mask if using nn.TransformerEncoder
+
+
+        # Pass through Decoder layers
+        output = tgt_emb
+        for mod in self.decoder:
+           output = mod(output, memory, tgt_mask=tgt_mask, memory_mask=memory_key_padding_mask) # Pass memory_key_padding_mask to cross-attn
+
+
+        output = self.fc_out(output) # SeqLen x Batch x VocabSize
+
+        # Transpose back to Batch x SeqLen x VocabSize
+        return output.transpose(0,1)
+
+
+# Example Usage (replace with your actual data loading and training loop)
+if __name__ == '__main__':
+    src_vocab_size = 5000
+    tgt_vocab_size = 5000
+    d_model = 512
+    nhead = 8
+    num_encoder_layers = 3 # Reduced for faster example
+    num_decoder_layers = 3 # Reduced for faster example
+    dim_feedforward = 2048
+    dropout = 0.1
+    max_len = 100 # Example sequence length
+
+    model = Transformer(src_vocab_size, tgt_vocab_size, d_model, nhead,
+                        num_encoder_layers, num_decoder_layers, dim_feedforward, dropout, max_len)
+
+    # Example input (Batch Size = 2, Sequence Length = 10/12)
+    src = torch.randint(1, src_vocab_size, (2, 10)) # (N, S)
+    tgt = torch.randint(1, tgt_vocab_size, (2, 12)) # (N, T)
+
+    # Dummy padding masks (True means padded position) - optional
+    src_padding_mask = torch.zeros(src.shape, dtype=torch.bool)
+    src_padding_mask[0, 8:] = True # Pad last 2 tokens of first batch item in src
+    tgt_padding_mask = torch.zeros(tgt.shape, dtype=torch.bool)
+    tgt_padding_mask[1, 10:] = True # Pad last 2 tokens of second batch item in tgt
+
+
+    print("Input src shape:", src.shape)
+    print("Input tgt shape:", tgt.shape)
+    # print("Src padding mask:", src_padding_mask)
+    # print("Tgt padding mask:", tgt_padding_mask)
+
+
+    # Ensure model is on the correct device (e.g., CPU or GPU)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    src = src.to(device)
+    tgt = tgt.to(device)
+    # src_padding_mask = src_padding_mask.to(device) # Move masks to device if used
+    # tgt_padding_mask = tgt_padding_mask.to(device) # Move masks to device if used
+
+    # Note: Passing padding masks requires careful handling of shapes and values
+    # depending on the specific attention implementation (PyTorch's vs custom).
+    # This example omits passing masks to forward for simplicity, but they are crucial
+    # for real tasks. The MHA implementation has basic mask handling logic.
+    # For padding masks in PyTorch MHA: True indicates position *should be masked*.
+    # memory_key_padding_mask should have shape (N, S)
+    # tgt_mask should have shape (T, T) - the causal mask
+    # tgt_key_padding_mask should have shape (N, T) - for decoder self-attn
+
+    # Forward pass
+    output = model(src, tgt) # Add masks here if needed: model(src, tgt, src_padding_mask=src_padding_mask, ...)
+
+    print("Output shape:", output.shape) # Should be (Batch Size, Target Sequence Length, Target Vocab Size)
+    print("Example Usage Complete.") 
