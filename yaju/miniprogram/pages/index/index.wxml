@@ -1,0 +1,112 @@
+<view class="container">
+  <!-- 欢迎区域 -->
+  <view class="welcome-section">
+    <view class="welcome-content">
+      <text class="welcome-title">🏠 装修规划助手</text>
+      <text class="welcome-subtitle">简单三步，规划理想家居</text>
+    </view>
+  </view>
+
+
+  <!-- 主要功能卡片 -->
+  <view class="main-functions">
+    
+    <!-- 设置预算 -->
+    <view class="function-card {{budgetText === '未设置' ? 'highlight' : 'completed'}}" bindtap="setBudget">
+      <view class="card-icon">💰</view>
+      <view class="card-content">
+        <text class="card-title">设置预算</text>
+        <text class="card-desc">先设定装修总预算</text>
+        <text class="card-value">{{budgetText}}</text>
+      </view>
+      <view class="card-status">
+        <text class="status-icon">{{budgetText === '未设置' ? '✏️' : '✓'}}</text>
+      </view>
+    </view>
+
+    <!-- 空间规划 -->
+    <view class="function-card {{budgetText !== '未设置' && completedSpaces === 0 ? 'highlight' : completedSpaces > 0 ? 'completed' : 'disabled'}}" bindtap="goToSpaces">
+      <view class="card-icon">🏠</view>
+      <view class="card-content">
+        <text class="card-title">空间规划</text>
+        <text class="card-desc">选择要装修的房间</text>
+        <text class="card-value">{{spaceText}}</text>
+      </view>
+      <view class="card-status">
+        <text class="status-icon">{{budgetText === '未设置' ? '⏸️' : completedSpaces > 0 ? '✓' : '▶️'}}</text>
+      </view>
+    </view>
+
+    <!-- 查看预算 -->
+    <view class="function-card {{completedSpaces > 0 ? 'active' : 'disabled'}}" bindtap="goToBudget">
+      <view class="card-icon">📊</view>
+      <view class="card-content">
+        <text class="card-title">预算统计</text>
+        <text class="card-desc">查看各房间花费</text>
+        <text class="card-value">已用 {{usedBudgetText}}</text>
+      </view>
+      <view class="card-status">
+        <text class="status-icon">{{completedSpaces > 0 ? '📈' : '⏸️'}}</text>
+      </view>
+    </view>
+
+  </view>
+
+  <!-- 智能引导 -->
+  <view class="smart-guide" wx:if="{{showGuide}}">
+    <view class="guide-content">
+      <text class="guide-icon">{{guideIcon}}</text>
+      <view class="guide-text">
+        <text class="guide-title">{{guideTitle}}</text>
+        <text class="guide-desc">{{guideDesc}}</text>
+      </view>
+      <button class="guide-action" bindtap="handleGuideAction" data-action="{{guideAction}}">{{guideButtonText}}</button>
+    </view>
+  </view>
+
+  <!-- 进度提示 -->
+  <view class="progress-tip" wx:if="{{completedSpaces > 0}}">
+    <view class="progress-header">
+      <text class="progress-title">🎆 装修进度</text>
+      <text class="progress-count">{{completedSpaces}}/{{totalSpaces}} 个房间</text>
+    </view>
+    <view class="progress-bar">
+      <view class="progress-fill" style="width: {{Math.round(completedSpaces/totalSpaces*100)}}%;"></view>
+    </view>
+    <text class="progress-text">继续加油，离梦想家居越来越近了！</text>
+  </view>
+
+</view>
+
+<!-- 设置预算弹窗 -->
+<view class="modal-overlay" wx:if="{{showBudgetModal}}" catchtap="closeBudgetModal">
+  <view class="modal" catchtap="stopPropagation">
+    <view class="modal-header">
+      <text class="title-medium">设置装修预算</text>
+    </view>
+    <view class="modal-body">
+      <view class="input-group">
+        <text class="input-label">总预算 (元)</text>
+        <input 
+          class="input-field" 
+          type="digit" 
+          placeholder="如：100000"
+          value="{{tempBudget}}"
+          bindinput="onBudgetInput"
+          maxlength="10"
+          confirm-type="done"
+          cursor-spacing="10"
+          selection-start="-1"
+          selection-end="-1"
+        />
+      </view>
+      <view class="budget-tips">
+        <text class="tip-text">💡 建议预算分配：硬装60% 软装30% 家电10%</text>
+      </view>
+    </view>
+    <view class="modal-footer">
+      <button class="btn btn-secondary" bindtap="closeBudgetModal">取消</button>
+      <button class="btn btn-primary" bindtap="confirmBudget">确定</button>
+    </view>
+  </view>
+</view>

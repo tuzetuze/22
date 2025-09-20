@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__cloudbase__modifyDataModel",
+      "mcp__cloudbase__createCollection",
+      "mcp__cloudbase__updateCollection",
+      "mcp__cloudbase__insertDocuments",
+      "WebFetch(domain:api.iconify.design)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "cloudbase"
+  ]
+}
