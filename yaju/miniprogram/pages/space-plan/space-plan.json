@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "空间规划",
-  "enablePullDownRefresh": false,
-  "backgroundColor": "#f5f5f5",
-  "usingComponents": {
-    "room-3d": "../../components/room-3d/index"
-  }
-}
